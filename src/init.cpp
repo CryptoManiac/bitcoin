@@ -65,6 +65,13 @@
 #include "zmq/zmqnotificationinterface.h"
 #endif
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+
 bool fFeeEstimatesInitialized = false;
 static const bool DEFAULT_PROXYRANDOMIZE = true;
 static const bool DEFAULT_REST_ENABLE = false;
@@ -532,6 +539,30 @@ static void BlockNotifyCallback(bool initialSync, const CBlockIndex *pBlockIndex
 
     boost::replace_all(strCmd, "%s", pBlockIndex->GetBlockHash().GetHex());
     boost::thread t(runCommand, strCmd); // thread runs free
+}
+
+static void BlockNotifySocketCallback(bool initialSync, const CBlockIndex *pBlockIndex)
+{
+    if (initialSync || !pBlockIndex)
+        return;
+
+    std::string host = GetArg("-blocknotifyhost", "127.0.0.1");
+    int port = GetArg("-blocknotifyport", 17117);
+
+    int sockfd;
+    struct sockaddr_in servaddr;
+    char sendline[1000];
+
+    snprintf(sendline, sizeof(sendline) - 1, "{\"command\":\"blocknotify\",\"params\":[\"%s\",\"%s\"]}\n", "bitcoin", pBlockIndex->GetBlockHash().GetHex().c_str());
+
+    sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    bzero(&servaddr, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = inet_addr(host.c_str());
+    servaddr.sin_port = htons(port);
+    connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
+    send(sockfd, sendline, strlen(sendline), 0);
+    close(sockfd);
 }
 
 static bool fHaveGenesis = false;
@@ -1567,6 +1598,9 @@ bool AppInitMain(boost::thread_group& threadGroup, CScheduler& scheduler)
 
     if (IsArgSet("-blocknotify"))
         uiInterface.NotifyBlockTip.connect(BlockNotifyCallback);
+
+    if (IsArgSet("-blocknotifyhost"))
+        uiInterface.NotifyBlockTip.connect(BlockNotifySocketCallback);
 
     std::vector<boost::filesystem::path> vImportFiles;
     if (mapMultiArgs.count("-loadblock"))
